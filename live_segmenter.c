@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2013 Carson McDonald
+ * Copyright (c) 2009 Carson McDonald
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License version 2
@@ -38,7 +38,7 @@ static AVStream *add_output_stream(AVFormatContext *output_format_context, AVStr
   AVCodecContext *output_codec_context;
   AVStream *output_stream;
 
-  output_stream = avformat_new_stream(output_format_context, 0);
+  output_stream = av_new_stream(output_format_context, 0);
   if (!output_stream) 
   {
     fprintf(stderr, "Segmenter error: Could not allocate stream\n");
@@ -146,24 +146,24 @@ int main(int argc, char **argv)
   }
 
   AVFormatContext *input_context = NULL;
-  int ret = avformat_open_input(&input_context, config.input_filename, input_format, NULL);
+  int ret = avformat_open_input(&input_context, config.input_filename, input_format, 0);
   if (ret != 0) 
   {
     fprintf(stderr, "Segmenter error: Could not open input file, make sure it is an mpegts file: %d\n", ret);
     exit(1);
   }
 
-  if (avformat_find_stream_info(input_context, NULL) < 0)
+  if (av_find_stream_info(input_context) < 0) 
   {
     fprintf(stderr, "Segmenter error: Could not read stream information\n");
     exit(1);
   }
 
-//#if LIBAVFORMAT_VERSION_MAJOR >= 52 && LIBAVFORMAT_VERSION_MINOR >= 45
+#if LIBAVFORMAT_VERSION_MAJOR >= 52 && LIBAVFORMAT_VERSION_MINOR >= 45
+  AVOutputFormat *output_format = av_av_guess_format("mpegts", NULL, NULL);
+#else
   AVOutputFormat *output_format = av_guess_format("mpegts", NULL, NULL);
-//#else
- // AVOutputFormat *output_format = guess_format("mpegts", NULL, NULL);
-//#endif
+#endif
   if (!output_format) 
   {
     fprintf(stderr, "Segmenter error: Could not find MPEG-TS muxer\n");
@@ -205,13 +205,13 @@ int main(int argc, char **argv)
     }
   }
 
-// if (av_set_parameters(output_context, NULL) < 0)
-//  {
-//    fprintf(stderr, "Segmenter error: Invalid output format parameters\n");
-//    exit(1);
-//  }
+  if (av_set_parameters(output_context, NULL) < 0) 
+  {
+    fprintf(stderr, "Segmenter error: Invalid output format parameters\n");
+    exit(1);
+  }
 
-  av_dump_format(output_context, 0, config.filename_prefix, 1);
+  dump_format(output_context, 0, config.filename_prefix, 1);
 
   if(video_index >= 0)
   {
@@ -221,22 +221,21 @@ int main(int argc, char **argv)
       fprintf(stderr, "Segmenter error: Could not find video decoder, key frames will not be honored\n");
     }
 
-    if (avcodec_open2(video_stream->codec, codec, NULL) < 0)
+    if (avcodec_open(video_stream->codec, codec) < 0) 
     {
       fprintf(stderr, "Segmenter error: Could not open video decoder, key frames will not be honored\n");
     }
   }
 
-  unsigned int output_index = 1;
-  snprintf(output_filename, strlen(config.temp_directory) + 1 + strlen(config.filename_prefix) + 10, "%s/%s-%05u.ts", config.temp_directory, config.filename_prefix, output_index++);
- 
-  if (avio_open(&output_context->pb, output_filename, AVIO_FLAG_WRITE) < 0) 
+  unsigned int output_index = 0;
+  snprintf(output_filename, strlen(config.temp_directory) + 1 + strlen(config.filename_prefix) + 10, "%s/%s-%01u.ts", config.temp_directory, config.filename_prefix, output_index++);
+  if (url_fopen(&output_context->pb, output_filename, AVIO_FLAG_WRITE) < 0) 
   {
     fprintf(stderr, "Segmenter error: Could not open '%s'\n", output_filename);
     exit(1);
   }
 
-  if (avformat_write_header(output_context, NULL))
+  if (av_write_header(output_context)) 
   {
     fprintf(stderr, "Segmenter error: Could not write mpegts header to first output file\n");
     exit(1);
@@ -265,7 +264,7 @@ int main(int argc, char **argv)
       break;
     }
 
-    if (packet.stream_index == video_index && (packet.flags & AV_PKT_FLAG_KEY))
+    if (packet.stream_index == video_index && (packet.flags & AV_PKT_FLAG_KEY)) 
     {
       segment_time = (double)video_stream->pts.val * video_stream->time_base.num / video_stream->time_base.den;
     }
@@ -281,13 +280,13 @@ int main(int argc, char **argv)
     // done writing the current file?
     if (segment_time - prev_segment_time >= config.segment_length) 
     {
-      avio_flush(output_context->pb);
-      avio_close(output_context->pb);
+      put_flush_packet(output_context->pb);
+      url_fclose(output_context->pb);
 
       output_transfer_command(first_segment, ++last_segment, 0, config.encoding_profile);
 
-      snprintf(output_filename, strlen(config.temp_directory) + 1 + strlen(config.filename_prefix) + 10, "%s/%s-%05u.ts", config.temp_directory, config.filename_prefix, output_index++);
-      if (avio_open(&output_context->pb, output_filename, AVIO_FLAG_WRITE) < 0)
+      snprintf(output_filename, strlen(config.temp_directory) + 1 + strlen(config.filename_prefix) + 10, "%s/%s-%01u.ts", config.temp_directory, config.filename_prefix, output_index++);
+      if (url_fopen(&output_context->pb, output_filename, AVIO_FLAG_WRITE) < 0) 
       {
         fprintf(stderr, "Segmenter error: Could not open '%s'\n", output_filename);
         break;
@@ -324,7 +323,7 @@ int main(int argc, char **argv)
     av_freep(&output_context->streams[i]);
   }
 
-  avio_close(output_context->pb);
+  url_fclose(output_context->pb);
   av_free(output_context);
 
   output_transfer_command(first_segment, ++last_segment, 1, config.encoding_profile);
